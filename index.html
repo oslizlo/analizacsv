@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<title>Analiza CSV klientów</title>
+<style>
+body { font-family: Arial; margin: 20px; background: #f5f7fa; }
+button { padding: 10px 15px; margin: 5px; cursor: pointer; }
+table { border-collapse: collapse; width: 100%; background: white; margin-top: 20px; }
+th, td { border: 1px solid #ddd; padding: 8px; font-size: 14px; vertical-align: top; }
+th { background: #eef2f7; }
+.total-row { font-weight: bold; background: #e6f0ff; }
+</style>
+</head>
+<body>
+
+<h2>Wczytaj plik CSV klientów</h2>
+
+<input type="file" id="fileInput" accept=".csv">
+<br>
+<button onclick="groupByID()">Grupuj po ID</button>
+<button onclick="sumByCustomer()">Sumuj wartości klientów (pełne taryfy)</button>
+
+<div id="status"></div>
+<div id="output"></div>
+
+<script>
+let csvData = [];
+
+// ===== BARDZO ODPORNY PARSER CSV (Excel + cudzysłowy) =====
+function parseCSV(text) {
+    const lines = text.replace(/\r/g, '').split('\n').filter(l => l.trim() !== '');
+    const headers = smartSplit(lines[0]);
+
+    const data = [];
+
+    for (let i = 1; i < lines.length; i++) {
+        const rowValues = smartSplit(lines[i]);
+        if (rowValues.length < headers.length) continue;
+
+        let obj = {};
+        headers.forEach((h, index) => {
+            obj[h.trim()] = (rowValues[index] || "").replace(/^"|"$/g, '').trim();
+        });
+
+        data.push(obj);
+    }
+
+    return data;
+}
+
+// Rozdzielanie linii CSV z obsługą cudzysłowów
+function smartSplit(line) {
+    const result = [];
+    let current = "";
+    let inQuotes = false;
+
+    for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+
+        if (char === '"') {
+            inQuotes = !inQuotes;
+        } else if (char === ',' && !inQuotes) {
+            result.push(current);
+            current = "";
+        } else {
+            current += char;
+        }
+    }
+    result.push(current);
+    return result;
+}
+
+// ===== Wczytywanie pliku =====
+document.getElementById("fileInput").addEventListener("change", function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(event) {
+        const text = event.target.result;
+        csvData = parseCSV(text);
+
+        document.getElementById("status").innerHTML =
+            "<b>Wczytano rekordów: " + csvData.length + "</b>";
+
+        displayFullTable(csvData);
+        console.log(csvData);
+    };
+
+    reader.readAsText(file, "UTF-8");
+});
+
+// ===== Sortowanie po ID =====
+function groupByID() {
+    if (csvData.length === 0) {
+        alert("Najpierw wczytaj plik CSV!");
+        return;
+    }
+
+    const sorted = [...csvData].sort((a, b) =>
+        Number(a.customer_id) - Number(b.customer_id)
+    );
+
+    displayFullTable(sorted);
+}
+
+// ===== KLUCZOWA FUNKCJA – WSZYSTKIE TARYFY I TYPY =====
+function sumByCustomer() {
+    if (csvData.length === 0) {
+        alert("Najpierw wczytaj plik CSV!");
+        return;
+    }
+
+    const map = {};
+
+    csvData.forEach(row => {
+        const id = row.customer_id;
+        const netto = parseFloat(row.netto) || 0;
+        const brutto = parseFloat(row.brutto) || 0;
+
+        if (!map[id]) {
+            map[id] = {
+                customer_id: id,
+                klient: row.klient,
+                taryfy: [],
+                typy: [],
+                daty: [],
+                suma_netto: 0,
+                suma_brutto: 0
+            };
+        }
+
+        // DODAJEMY WSZYSTKIE (bez nadpisywania!)
+        if (row.nazwa_taryfy && !map[id].taryfy.includes(row.nazwa_taryfy)) {
+            map[id].taryfy.push(row.nazwa_taryfy);
+        }
+
+        if (row.typ_taryfy && !map[id].typy.includes(row.typ_taryfy)) {
+            map[id].typy.push(row.typ_taryfy);
+        }
+
+        if (row.dataod && !map[id].daty.includes(row.dataod)) {
+            map[id].daty.push(row.dataod);
+        }
+
+        map[id].suma_netto += netto;
+        map[id].suma_brutto += brutto;
+    });
+
+    const result = Object.values(map).sort((a, b) =>
+        Number(a.customer_id) - Number(b.customer_id)
+    );
+
+    displaySummaryTable(result);
+}
+
+// ===== Tabela pełna =====
+function displayFullTable(data) {
+    let html = `
+    <table>
+        <tr>
+            <th>ID</th>
+            <th>Klient</th>
+            <th>Nazwa taryfy</th>
+            <th>Typ taryfy</th>
+            <th>Data od</th>
+            <th>Netto</th>
+            <th>Brutto</th>
+        </tr>`;
+
+    data.forEach(row => {
+        html += `
+        <tr>
+            <td>${row.customer_id}</td>
+            <td>${row.klient}</td>
+            <td>${row.nazwa_taryfy}</td>
+            <td>${row.typ_taryfy}</td>
+            <td>${row.dataod}</td>
+            <td>${row.netto}</td>
+            <td>${row.brutto}</td>
+        </tr>`;
+    });
+
+    html += "</table>";
+    document.getElementById("output").innerHTML = html;
+}
+
+// ===== Tabela podsumowania (WSZYSTKIE taryfy i typy) =====
+function displaySummaryTable(data) {
+    let totalNetto = 0;
+    let totalBrutto = 0;
+
+    let html = `
+    <table>
+        <tr>
+            <th>ID Klienta</th>
+            <th>Klient</th>
+            <th>Wszystkie nazwy taryf</th>
+            <th>Wszystkie typy taryf</th>
+            <th>Wszystkie daty od</th>
+            <th>Suma Netto</th>
+            <th>Suma Brutto</th>
+        </tr>`;
+
+    data.forEach(row => {
+        totalNetto += row.suma_netto;
+        totalBrutto += row.suma_brutto;
+
+        html += `
+        <tr>
+            <td>${row.customer_id}</td>
+            <td>${row.klient}</td>
+            <td>${row.taryfy.join("<br>")}</td>
+            <td>${row.typy.join("<br>")}</td>
+            <td>${row.daty.join("<br>")}</td>
+            <td>${row.suma_netto.toFixed(2)}</td>
+            <td>${row.suma_brutto.toFixed(2)}</td>
+        </tr>`;
+    });
+
+    html += `
+        <tr class="total-row">
+            <td colspan="5">ŁĄCZNA SUMA WSZYSTKICH KLIENTÓW</td>
+            <td>${totalNetto.toFixed(2)}</td>
+            <td>${totalBrutto.toFixed(2)}</td>
+        </tr>
+    </table>`;
+
+    document.getElementById("output").innerHTML = html;
+}
+</script>
+
+</body>
+</html>
